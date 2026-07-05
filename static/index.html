@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HN Tech Intel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #111; }
+    header { background: #ff6600; color: white; padding: 1rem 2rem; }
+    header h1 { font-size: 1.4rem; font-weight: 700; }
+    header p { font-size: 0.85rem; opacity: 0.9; margin-top: 0.2rem; }
+    main { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    .form-row { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    input[type="text"] {
+      flex: 1; padding: 0.6rem 1rem; border: 1px solid #ddd;
+      border-radius: 6px; font-size: 1rem;
+    }
+    button {
+      padding: 0.6rem 1.4rem; background: #ff6600; color: white;
+      border: none; border-radius: 6px; font-size: 1rem; cursor: pointer;
+    }
+    button:disabled { background: #aaa; cursor: not-allowed; }
+    #progress { margin-bottom: 1.5rem; display: none; }
+    .progress-bar-wrap { background: #ddd; border-radius: 4px; height: 8px; margin: 0.5rem 0; }
+    .progress-bar { background: #ff6600; height: 8px; border-radius: 4px; transition: width 0.3s; }
+    .counters { font-size: 0.85rem; color: #555; }
+    #error { color: red; margin-bottom: 1rem; display: none; }
+    .cards { display: grid; gap: 1rem; }
+    .card {
+      background: white; border-radius: 8px; padding: 1.2rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .card h2 { font-size: 1.1rem; margin-bottom: 0.3rem; }
+    .card a { color: #ff6600; text-decoration: none; font-size: 0.85rem; }
+    .badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0; }
+    .badge {
+      background: #f0f0f0; border-radius: 12px;
+      padding: 0.2rem 0.7rem; font-size: 0.75rem; color: #333;
+    }
+    .meta { font-size: 0.8rem; color: #777; margin-bottom: 0.5rem; }
+    .brief { font-size: 0.9rem; line-height: 1.5; color: #444; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>HN Tech Intel</h1>
+    <p>Tech stack intelligence from Hacker News "Who's Hiring" threads</p>
+  </header>
+  <main>
+    <div class="form-row">
+      <input type="text" id="thread-id" placeholder="HN Thread ID (e.g. 43985731)" />
+      <button id="analyze-btn" onclick="startAnalysis()">Analyze</button>
+    </div>
+    <div id="error"></div>
+    <div id="progress">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="bar" style="width:0%"></div>
+      </div>
+      <div class="counters" id="counters">Starting...</div>
+    </div>
+    <div class="cards" id="cards"></div>
+  </main>
+
+  <script>
+    let pollInterval = null;
+
+    function showError(msg) {
+      const el = document.getElementById('error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function startAnalysis() {
+      const input = document.getElementById('thread-id').value.trim();
+      const threadId = parseInt(input, 10);
+      if (!threadId || threadId <= 0) { showError('Enter a valid HN thread ID'); return; }
+
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('cards').innerHTML = '';
+      document.getElementById('progress').style.display = 'block';
+      document.getElementById('analyze-btn').disabled = true;
+
+      const res = await fetch('/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread_id: threadId }),
+      });
+      if (!res.ok) {
+        showError('Failed to start analysis: ' + res.status);
+        document.getElementById('analyze-btn').disabled = false;
+        return;
+      }
+      const { job_id } = await res.json();
+      pollInterval = setInterval(() => pollJob(job_id, threadId), 2000);
+    }
+
+    async function pollJob(jobId, threadId) {
+      try {
+        const res = await fetch('/jobs/' + jobId);
+        if (!res.ok) return;
+        const job = await res.json();
+
+        const pct = job.total > 0 ? Math.round((job.enriched / job.total) * 100) : 0;
+        document.getElementById('bar').style.width = pct + '%';
+        document.getElementById('counters').textContent =
+          'Scraped: ' + job.scraped + '/' + job.total +
+          ' | Enriched: ' + job.enriched + '/' + job.total +
+          ' | Failed: ' + job.failed;
+
+        if (job.status === 'done') {
+          clearInterval(pollInterval);
+          document.getElementById('analyze-btn').disabled = false;
+          await loadCompanies(threadId);
+        } else if (job.status === 'failed') {
+          clearInterval(pollInterval);
+          document.getElementById('analyze-btn').disabled = false;
+          showError('Pipeline failed. Check server logs.');
+        }
+      } catch (e) {
+        // network hiccup during polling — keep trying
+      }
+    }
+
+    async function loadCompanies(threadId) {
+      const res = await fetch('/companies?thread_id=' + threadId + '&limit=100');
+      const companies = await res.json();
+      const container = document.getElementById('cards');
+      container.innerHTML = '';
+
+      companies.forEach(c => {
+        let techs = [];
+        try { techs = JSON.parse(c.technologies || '[]'); } catch (_) {}
+
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML =
+          '<h2>' + escHtml(c.name || 'Unknown') + '</h2>' +
+          '<a href="' + escHtml(c.url || '#') + '" target="_blank" rel="noopener">' + escHtml(c.domain || '') + '</a>' +
+          '<div class="badges">' + techs.map(t => '<span class="badge">' + escHtml(t) + '</span>').join('') + '</div>' +
+          '<div class="meta">' + escHtml(c.industry || '') + (c.company_size ? ' · ' + escHtml(c.company_size) : '') + '</div>' +
+          '<div class="brief">' + escHtml(c.analyst_brief || 'No analyst brief available.') + '</div>';
+        container.appendChild(card);
+      });
+    }
+  </script>
+</body>
+</html>
