@@ -80,20 +80,12 @@ async def enrich_one(
     return None
 
 
-async def _enrich_batch_async(
+async def enrich_batch(
     items: list[tuple[CompanyInput, RawCompanyData]],
     api_key: str,
-    concurrency: int,
+    concurrency: int = 5,
 ) -> list[EnrichmentOutput | None]:
     semaphore = asyncio.Semaphore(concurrency)
     client = anthropic.AsyncAnthropic(api_key=api_key)
     tasks = [enrich_one(client, semaphore, company, raw) for company, raw in items]
     return await asyncio.gather(*tasks)
-
-
-def enrich_batch(
-    items: list[tuple[CompanyInput, RawCompanyData]],
-    api_key: str,
-    concurrency: int = 5,
-) -> list[EnrichmentOutput | None]:
-    return asyncio.run(_enrich_batch_async(items, api_key, concurrency))
