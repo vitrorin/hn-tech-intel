@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import asyncpg
 
@@ -11,8 +12,7 @@ async def init_pool(database_url: str) -> asyncpg.Pool:
 
 
 async def run_migrations(pool: asyncpg.Pool, sql_path: str) -> None:
-    with open(sql_path) as f:
-        sql = f.read()
+    sql = Path(sql_path).read_text()  # sync read — called once at startup before event loop is fully loaded
     async with pool.acquire() as conn:
         await conn.execute(sql)
 
@@ -117,7 +117,7 @@ async def get_companies(
                        e.technologies, e.industry, e.company_size, e.analyst_brief
                 FROM companies c
                 LEFT JOIN enrichments e ON e.company_id = c.id
-                WHERE c.hn_thread_id = $1
+                WHERE c.hn_thread_id = (SELECT id FROM hn_threads WHERE hn_id = $1)
                 ORDER BY c.id
                 LIMIT $2 OFFSET $3
                 """,

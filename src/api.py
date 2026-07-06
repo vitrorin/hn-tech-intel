@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,8 +20,16 @@ from .db import (
 from .models import JobStatus
 from .pipeline import run_pipeline
 
+logger = logging.getLogger(__name__)
+
 jobs: dict[str, JobStatus] = {}
 pool = None
+
+
+def _require_pool():
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return pool
 
 
 @asynccontextmanager
@@ -61,7 +70,13 @@ async def ingest(req: IngestRequest):
     job_id = str(uuid.uuid4())
     job = JobStatus(job_id=job_id, thread_id=req.thread_id)
     jobs[job_id] = job
-    asyncio.create_task(run_pipeline(pool, jobs, job_id, req.thread_id, settings))
+    task = asyncio.create_task(run_pipeline(_require_pool(), jobs, job_id, req.thread_id, settings))
+
+    def _log_task_exception(t: asyncio.Task) -> None:
+        if not t.cancelled() and t.exception():
+            logger.error("Pipeline task failed: %s", t.exception())
+
+    task.add_done_callback(_log_task_exception)
     return {"job_id": job_id}
 
 
@@ -74,17 +89,17 @@ async def get_job(job_id: str):
 
 @app.get("/threads")
 async def list_threads():
-    return await get_threads(pool)
+    return await get_threads(_require_pool())
 
 
 @app.get("/companies")
 async def list_companies(thread_id: int | None = None, page: int = 1, limit: int = 20):
-    return await get_companies(pool, thread_id, page, limit)
+    return await get_companies(_require_pool(), thread_id, page, limit)
 
 
 @app.get("/companies/{company_id}")
 async def get_company(company_id: int):
-    company = await get_company_by_id(pool, company_id)
+    company = await get_company_by_id(_require_pool(), company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     return company
@@ -92,7 +107,7 @@ async def get_company(company_id: int):
 
 @app.get("/metrics")
 async def metrics():
-    totals = await get_metrics(pool)
+    totals = await get_metrics(_require_pool())
     total = totals.get("companies_total") or 0
     failed = totals.get("scrape_failed") or 0
     enriched = totals.get("companies_enriched") or 0

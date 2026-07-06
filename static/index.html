@@ -135,8 +135,8 @@
       container.innerHTML = '';
 
       companies.forEach(c => {
-        let techs = [];
-        try { techs = JSON.parse(c.technologies || '[]'); } catch (_) {}
+        const raw = c.technologies;
+        const techs = Array.isArray(raw) ? raw : (() => { try { return JSON.parse(raw || '[]'); } catch (_) { return []; } })();
 
         const card = document.createElement('div');
         card.className = 'card';
