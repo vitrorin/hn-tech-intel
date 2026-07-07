@@ -3,6 +3,7 @@ import re
 from urllib.parse import urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
 from .models import CompanyInput
 
@@ -31,11 +32,21 @@ def _extract_company_name(text: str) -> str:
     return " ".join(words[:4]) if words else "Unknown"
 
 
+def _extract_urls(html_text: str) -> list[str]:
+    """Extract URLs from HN comment HTML. HN encodes URLs inside <a href> tags
+    as HTML entities (&#x2F; for /), so plain regex misses them. Parse <a> tags first."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    urls = [a["href"] for a in soup.find_all("a", href=True) if a["href"].startswith("http")]
+    if not urls:
+        urls = URL_RE.findall(soup.get_text())
+    return urls
+
+
 def parse_companies(thread_data: dict) -> list[CompanyInput]:
     companies: dict[str, CompanyInput] = {}
     for comment in thread_data.get("children", []):
         text = comment.get("text") or ""
-        urls = URL_RE.findall(text)
+        urls = _extract_urls(text)
         if not urls:
             continue
         url = urls[0]
